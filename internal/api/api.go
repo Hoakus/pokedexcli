@@ -3,14 +3,14 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/Hoakus/pokedexcli/internal/pokecache"
+	"io"
 	"net/http"
+	"time"
 )
 
-type JsonResponse interface {
-	GetResults() []string
-}
+type JsonResponse interface{}
 
-// https://pokeapi.co/api/v2/location-area/{id or name}/
 type LocationResponse struct {
 	Count    int     `json:"count"`
 	Next     *string `json:"next"`
@@ -29,6 +29,48 @@ func (l LocationResponse) GetResults() []string {
 	return names
 }
 
+type ExploreResponse struct {
+	PokemonEncounters []struct {
+		Pokemon struct {
+			Name string `json:"name"`
+			URL  string `json:"url"`
+		} `json:"pokemon"`
+	} `json:"pokemon_encounters"`
+}
+
+func (e ExploreResponse) GetResults() []string {
+	var names []string
+	for _, v := range e.PokemonEncounters {
+		names = append(names, v.Pokemon.Name)
+	}
+	return names
+}
+
+type PokemonResponse struct {
+	Id        int    `json:"id"`
+	Name      string `json:"name"`
+	BaseXp    int    `json:"base_experience"`
+	Height    int    `json:"height"`
+	Weight    int    `json:"weight"`
+	IsDefault bool   `json:"is_default"`
+	Order     int    `json:"order"`
+	Stats     []struct {
+		BaseStat int `json:"base_stat"`
+		Effort   int `json:"effort"`
+		Stat     struct {
+			Name string `json:"name"`
+			URL  string `json:"url"`
+		} `json:"stat"`
+	} `json:"stats"`
+	Types []struct {
+		Slot int `json:"slot"`
+		Type struct {
+			Name string `json:"name"`
+			URL  string `json:"url"`
+		} `json:"type"`
+	} `json:"types"`
+}
+
 func GetLocationArea(url string) (response LocationResponse, err error) {
 	response = LocationResponse{}
 	err = getResponse(url, &response)
@@ -39,7 +81,43 @@ func GetLocationArea(url string) (response LocationResponse, err error) {
 	return response, nil
 }
 
+func GetAreaByName(url string) (response ExploreResponse, err error) {
+	response = ExploreResponse{}
+	err = getResponse(url, &response)
+	if err != nil {
+		fmt.Println(err)
+		return ExploreResponse{}, err
+	}
+	return response, nil
+}
+
+func GetPokemonByName(url string) (response PokemonResponse, err error) {
+	response = PokemonResponse{}
+	err = getResponse(url, &response)
+	if err != nil {
+		fmt.Println(err)
+		return PokemonResponse{}, err
+	}
+	return response, nil
+}
+
+var pokeCache *pokecache.Cache
+
 func getResponse(url string, response JsonResponse) error {
+	if pokeCache == nil {
+		pokeCache = pokecache.NewCache(time.Second * 30)
+	}
+
+	if val, ok := pokeCache.Get(url); ok {
+		err := json.Unmarshal(val, &response)
+		if err != nil {
+			return err
+		}
+		success := fmt.Sprintf("accessed cache | %v found", url)
+		fmt.Println(success)
+		return nil
+	}
+
 	res, err := http.Get(url)
 	if err != nil {
 		return err
@@ -52,11 +130,13 @@ func getResponse(url string, response JsonResponse) error {
 
 	defer res.Body.Close()
 
-	decoder := json.NewDecoder(res.Body)
-	err = decoder.Decode(&response)
+	data, err := io.ReadAll(res.Body)
 	if err != nil {
+		fmt.Println("error reading results boddy")
 		return err
 	}
 
+	json.Unmarshal(data, &response)
+	pokeCache.Add(url, data)
 	return nil
 }
